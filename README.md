@@ -61,6 +61,41 @@ machine A (writer)          machine B (reader)
   the snapshot when a new one lands and applies new segments as they arrive — near-real-time.
 - One writer, many readers. SQLite is single-writer; multi-writer is out of scope.
 
+## Demo: sync across two Macs
+
+Prereqs on **both** Macs, on the same network:
+- Build zs3 (`zig build` in the zs3 repo) → `zig-out/bin/zs3`.
+- Get this repo and `pip install -r requirements.txt`.
+- Allow zs3 to accept incoming connections when macOS prompts, or in System Settings →
+  Network → Firewall.
+
+Find Mac A's LAN IP (used by Mac B to bootstrap):
+```bash
+ipconfig getifaddr en0     # e.g. 192.168.1.20
+```
+
+**Mac A — writer:**
+```bash
+# terminal 1: zs3 node
+./zig-out/bin/zs3 --distributed --port=9001 --data-dir=./data-a
+
+# terminal 2: demo writer (inserts a row every 2s and replicates it)
+python3 scripts/demo_writer.py --endpoint http://localhost:9001
+```
+
+**Mac B — reader:**
+```bash
+# terminal 1: zs3 node, bootstrapped to Mac A
+./zig-out/bin/zs3 --distributed --port=9002 --data-dir=./data-b --bootstrap=192.168.1.20:9001
+
+# terminal 2: demo reader (prints the replica's row count as it grows)
+python3 scripts/demo_reader.py --endpoint http://localhost:9002
+```
+
+Watch both: each `wrote row-N` on Mac A is echoed seconds later by `replica has N rows` on
+Mac B — the same data, live on both machines. The explicit `--bootstrap` covers the case
+where mDNS auto-discovery is blocked; port 9001 on Mac A must be reachable from Mac B.
+
 ## Layout
 
 ```
