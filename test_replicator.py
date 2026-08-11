@@ -11,7 +11,7 @@ import threading
 import time
 
 from zs3replicator.replicator import Replicator
-from zs3replicator.restore import restore
+from zs3replicator.restore import follow, restore
 from zs3replicator.store import Store
 
 ENDPOINT = os.environ.get("ZS3_ENDPOINT", "http://localhost:9000")
@@ -109,7 +109,92 @@ def test_segment_replay() -> None:
     print("OK: post-snapshot write recovered via segment replay")
 
 
+def test_app_checkpoint() -> None:
+    """An app-initiated checkpoint mid-replication must not lose writes."""
+    store = make_store()
+    store.client.create_bucket(Bucket=BUCKET)
+    clean_prefix(store)
+
+    db = tempfile.mktemp(suffix=".db")
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA wal_autocheckpoint=0")
+    conn.execute("CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)")
+    conn.execute("INSERT INTO t VALUES(1, 'one')")
+    conn.commit()
+
+    # Long snapshot cadence: the only snapshot is the one forced by the app's
+    # checkpoint, which must fold the checkpointed writes in.
+    rep = Replicator(store, db, interval=0.05, snapshot_interval=10.0)
+    thread = threading.Thread(target=rep.run, daemon=True)
+    thread.start()
+    try:
+        conn.execute("INSERT INTO t VALUES(2, 'two')")
+        conn.commit()
+        time.sleep(0.2)
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")  # app checkpoint
+        conn.execute("INSERT INTO t VALUES(3, 'three')")
+        conn.commit()
+        time.sleep(0.2)
+    finally:
+        rep.stop()
+        thread.join(timeout=2)
+        conn.close()
+
+    dest = tempfile.mktemp(suffix=".db")
+    restore(store, dest)
+    rows = sqlite3.connect(dest).execute("SELECT id, v FROM t ORDER BY id").fetchall()
+    assert rows == [(1, "one"), (2, "two"), (3, "three")], f"lost writes: {rows!r}"
+    print("OK: app checkpoint mid-replication recovered all writes")
+
+
+def test_follow() -> None:
+    """A follower keeps a local DB in sync as the writer replicates."""
+    store = make_store()
+    store.client.create_bucket(Bucket=BUCKET)
+    clean_prefix(store)
+
+    db = tempfile.mktemp(suffix=".db")
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA wal_autocheckpoint=0")
+    conn.execute("CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)")
+    conn.execute("INSERT INTO t VALUES(1, 'one')")
+    conn.commit()
+
+    rep = Replicator(store, db, interval=0.05, snapshot_interval=0.4)
+    rep_thread = threading.Thread(target=rep.run, daemon=True)
+    rep_thread.start()
+
+    dest = tempfile.mktemp(suffix=".db")
+    stop_follow = threading.Event()
+    fol_thread = threading.Thread(
+        target=follow, args=(store, dest),
+        kwargs={"interval": 0.05, "stop": stop_follow}, daemon=True)
+    fol_thread.start()
+
+    try:
+        for i in range(2, 6):
+            time.sleep(0.15)
+            conn.execute("INSERT INTO t VALUES(?, ?)", (i, f"val{i}"))
+            conn.commit()
+        time.sleep(0.8)  # let snapshots + segments propagate
+    finally:
+        rep.stop()
+        rep_thread.join(timeout=2)
+        stop_follow.set()
+        fol_thread.join(timeout=2)
+        conn.close()
+
+    rows = sqlite3.connect(dest).execute("SELECT id, v FROM t ORDER BY id").fetchall()
+    expected = [(1, "one")] + [(i, f"val{i}") for i in range(2, 6)]
+    assert rows == expected, f"follower out of sync: {rows!r} != {expected!r}"
+    print("OK: follower kept local DB in sync")
+
+
 if __name__ == "__main__":
     test_roundtrip()
     test_segment_replay()
+    test_app_checkpoint()
+    test_follow()
     print("All tests passed!")

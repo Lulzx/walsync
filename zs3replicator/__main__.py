@@ -10,7 +10,7 @@ import argparse
 import os
 
 from .replicator import Replicator
-from .restore import restore
+from .restore import follow, restore
 from .store import Store
 
 
@@ -41,6 +41,11 @@ def _cmd_restore(args: argparse.Namespace) -> None:
     print(f"restored from snapshot generation {gen} to {args.dest}")
 
 
+def _cmd_follow(args: argparse.Namespace) -> None:
+    store = _store(args)
+    follow(store, args.dest, interval=args.interval)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="zs3replicator")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -62,6 +67,14 @@ def main() -> None:
     res.add_argument("--prefix", required=True)
     res.add_argument("--dest", required=True, help="path to write the restored database")
     res.set_defaults(func=_cmd_restore)
+
+    fol = sub.add_parser("follow", help="continuously keep a local DB in sync with zs3")
+    fol.add_argument("--endpoint", required=True)
+    fol.add_argument("--bucket", required=True)
+    fol.add_argument("--prefix", required=True)
+    fol.add_argument("--dest", required=True, help="path to the local database to keep in sync")
+    fol.add_argument("--interval", type=float, default=1.0, help="poll interval (s)")
+    fol.set_defaults(func=_cmd_follow)
 
     args = parser.parse_args()
     args.func(args)

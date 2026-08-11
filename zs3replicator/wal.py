@@ -36,3 +36,15 @@ def wal_header(db: str) -> bytes:
     """The 32-byte WAL header, or b"" if the WAL doesn't exist."""
     with open(wal_path(db), "rb") as f:
         return f.read(WAL_HEADER_SIZE)
+
+
+def wal_salt(db: str) -> bytes:
+    """The 8-byte salt from the WAL header (bytes 12-20), or b"" if no WAL.
+
+    SQLite generates a fresh salt for every new WAL, so a change in salt means the WAL
+    was truncated and a new generation started (e.g. an app-initiated checkpoint).
+    """
+    h = wal_header(db)
+    if len(h) < 20:
+        return b""
+    return h[12:20]
