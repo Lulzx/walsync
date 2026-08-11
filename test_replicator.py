@@ -192,9 +192,74 @@ def test_follow() -> None:
     print("OK: follower kept local DB in sync")
 
 
+def test_follow_stress() -> None:
+    """Heavy: many segments in one generation, follower applies them incrementally.
+
+    Long snapshot cadence + fast poll means the WAL grows into many segments between
+    snapshots, so the follower must reconstruct the WAL (header + [last_applied, ...))
+    repeatedly as new segments land. The follower's DB must match the writer's exactly.
+    """
+    store = make_store()
+    store.client.create_bucket(Bucket=BUCKET)
+    clean_prefix(store)
+
+    db = tempfile.mktemp(suffix=".db")
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA wal_autocheckpoint=0")
+    conn.execute("PRAGMA page_size=8192")
+    conn.execute("CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n REAL)")
+    conn.commit()
+
+    # Snapshot every 1s so the follower has a snapshot to start from, but the fast
+    # poll + continuous writes still pile many segments into each generation, which
+    # the follower must apply incrementally (header + [last_applied, ...)).
+    rep = Replicator(store, db, interval=0.01, snapshot_interval=1.0,
+                     wal_threshold=64 * 1024 * 1024)
+    rep_thread = threading.Thread(target=rep.run, daemon=True)
+    rep_thread.start()
+
+    dest = tempfile.mktemp(suffix=".db")
+    stop_follow = threading.Event()
+    fol_thread = threading.Thread(
+        target=follow, args=(store, dest),
+        kwargs={"interval": 0.01, "stop": stop_follow}, daemon=True)
+    fol_thread.start()
+
+    try:
+        # Spread the writes out so the follower applies segments in many batches.
+        for i in range(1, 3001):
+            conn.execute("INSERT INTO t VALUES(?, ?, ?)", (i, f"row{i}", i * 1.5))
+            if i % 50 == 0:
+                conn.commit()
+                time.sleep(0.05)
+        conn.commit()
+        time.sleep(1.0)  # let the tail segments propagate
+    finally:
+        rep.stop()
+        rep_thread.join(timeout=2)
+        stop_follow.set()
+        fol_thread.join(timeout=2)
+        conn.close()
+
+    src = sqlite3.connect(db)
+    dst = sqlite3.connect(dest)
+    try:
+        src_rows = src.execute("SELECT id, v, n FROM t ORDER BY id").fetchall()
+        dst_rows = dst.execute("SELECT id, v, n FROM t ORDER BY id").fetchall()
+    finally:
+        src.close()
+        dst.close()
+
+    assert len(dst_rows) == 3000, f"follower has {len(dst_rows)} rows, expected 3000"
+    assert dst_rows == src_rows, "follower diverged from writer"
+    print("OK: follow stress — 3000 rows, incremental segments, follower matches writer")
+
+
 if __name__ == "__main__":
     test_roundtrip()
     test_segment_replay()
     test_app_checkpoint()
     test_follow()
+    test_follow_stress()
     print("All tests passed!")
