@@ -1,4 +1,4 @@
-"""Command-line interface: ``python3 -m zs3replicator replicate|restore``.
+"""Command-line interface: ``python3 -m walsync replicate|restore|follow``.
 
 Credentials come from the standard ``AWS_ACCESS_KEY_ID`` / ``AWS_SECRET_ACCESS_KEY``
 environment variables.
@@ -47,7 +47,7 @@ def _cmd_follow(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="zs3replicator")
+    parser = argparse.ArgumentParser(prog="walsync")
     sub = parser.add_subparsers(dest="command", required=True)
 
     rep = sub.add_parser("replicate", help="continuously replicate a SQLite DB to zs3")

@@ -17,9 +17,9 @@ import tempfile
 import threading
 import time
 
-from zs3replicator.replicator import Replicator
-from zs3replicator.restore import follow
-from zs3replicator.store import Store
+from walsync.replicator import Replicator
+from walsync.restore import follow
+from walsync.store import Store
 
 A = Store("http://localhost:9001", "p2p", "app", "minioadmin", "minioadmin")
 B = Store("http://localhost:9002", "p2p", "app", "minioadmin", "minioadmin")

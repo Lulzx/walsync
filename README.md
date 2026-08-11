@@ -30,16 +30,16 @@ truncated WAL and snapshots immediately — so a restore never misses a write.
 pip install -r requirements.txt
 
 # replicate (writer machine)
-python3 -m zs3replicator replicate \
+python3 -m walsync replicate \
   --db app.db --endpoint http://localhost:9000 \
   --bucket repl --prefix app --snapshot-interval 60
 
 # restore (one-shot)
-python3 -m zs3replicator restore \
+python3 -m walsync restore \
   --endpoint http://localhost:9000 --bucket repl --prefix app --dest restored.db
 
 # follow (keep a local DB in sync, continuously)
-python3 -m zs3replicator follow \
+python3 -m walsync follow \
   --endpoint http://localhost:9000 --bucket repl --prefix app --dest replica.db
 ```
 

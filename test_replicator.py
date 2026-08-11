@@ -10,9 +10,9 @@ import tempfile
 import threading
 import time
 
-from zs3replicator.replicator import Replicator
-from zs3replicator.restore import follow, restore
-from zs3replicator.store import Store
+from walsync.replicator import Replicator
+from walsync.restore import follow, restore
+from walsync.store import Store
 
 ENDPOINT = os.environ.get("ZS3_ENDPOINT", "http://localhost:9000")
 BUCKET = "repl-test"
