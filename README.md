@@ -96,6 +96,73 @@ Watch both: each `wrote row-N` on Mac A is echoed seconds later by `replica has 
 Mac B — the same data, live on both machines. The explicit `--bootstrap` covers the case
 where mDNS auto-discovery is blocked; port 9001 on Mac A must be reachable from Mac B.
 
+## Sync across networks (VPS relay)
+
+p2p needs the machines to reach each other. When they're on different networks (no
+shared LAN, NAT, hotel Wi-Fi), put a plain standalone zs3 node on a server with a public
+IP and point every machine at it. Both sides only make outbound S3 calls, so no NAT
+traversal or firewall holes are needed:
+
+```
+machine A (writer)  --replicate-->  VPS zs3 (public)  <--follow--  machine B (reader)
+```
+
+This is the same `replicate` / `follow` as above, just with `--endpoint` set to the VPS.
+Because zs3 speaks S3 and uses SigV4 auth, you can also use a real S3 provider (AWS S3,
+MinIO, Cloudflare R2) — anything boto3 supports.
+
+One public VPS + `walsync` = your DB is on every machine, everywhere, with seconds of lag.
+
+### Deploy the relay (verified setup)
+
+A VPS running zs3 as a standalone store. It needs Zig 0.16.0 to build (zs3 pins that
+version) and `b3sum` (in `coreutils`) to verify the download:
+
+```bash
+# on the VPS, as root
+# 1. install Zig 0.16.0
+cd /opt
+curl -fsSL -o zig.tar.xz https://ziglang.org/download/0.16.0/zig-x86_64-linux.tar.xz
+b3sum zig.tar.xz   # compare against ziglang.org/download/0.16.0
+tar -xJf zig.tar.xz && mv zig-x86_64-linux /opt/zig
+ln -s /opt/zig/zig /usr/local/bin/zig
+
+# 2. build zs3
+git clone https://github.com/Lulzx/zs3.git /opt/zs3-repo
+cd /opt/zs3-repo && zig build -Doptimize=ReleaseFast
+# → /opt/zs3-repo/zig-out/bin/zs3
+
+# 3. run it as a service (systemd)
+#    --acl "<user>:<password>:<secret>" sets the single account; --port=9000
+cat > /etc/systemd/system/zs3.service <<'EOF'
+[Unit]
+Description=zs3 S3 server
+After=network.target
+
+[Service]
+ExecStart=/opt/zs3-repo/zig-out/bin/zs3 --port=9000 --acl=admin:myuser:mypassword --data-dir=/var/lib/zs3
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload && systemctl start zs3 && systemctl enable zs3
+```
+
+Then on each machine (writer `replicate`, readers `follow`):
+
+```bash
+export AWS_ACCESS_KEY_ID=myuser AWS_SECRET_ACCESS_KEY=mypassword
+# writer
+python3 -m walsync replicate --db app.db --endpoint http://YOUR_VPS:9000 --bucket demo --prefix app
+# reader
+python3 -m walsync follow    --endpoint http://YOUR_VPS:9000 --bucket demo --prefix app --dest replica.db
+```
+
+The relay runs headless and needs no inbound connections from the internet beyond the
+S3 port. Verified end-to-end against a real VPS: writer replicated 20 rows, restore and
+`follow` both returned all 20.
+
 ## Layout
 
 ```
