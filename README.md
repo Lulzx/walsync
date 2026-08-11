@@ -1,6 +1,6 @@
-# zs3-replicator
+# walsync
 
-SQLite, replicated to S3. Continuously. Restore on demand. Sync across machines.
+Stream SQLite's WAL to S3. Restore on demand. Sync across machines.
 
 Your app keeps writing to a local SQLite file. This agent copies every change to zs3
 (or any S3-compatible store) as it happens. Machine dies? Restore the DB, lose seconds.
@@ -81,5 +81,6 @@ __main__.py   CLI
 ## Test
 
 ```bash
-python3 test_replicator.py   # needs zs3 on :9000
+python3 test_replicator.py          # standalone, needs zs3 on :9000
+python3 test_follow_distributed.py  # 2-node distributed cluster (:9001, :9002)
 ```
